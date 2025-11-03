@@ -17,6 +17,8 @@ DB_NAME, COLL = "hyperliquid", "millionaires"
 COINS = ["BTC", "ETH", "HYPE"]
 RETRY, PARALLEL = 3, 10
 
+st.write(f"Mongo URI: {os.getenv('MONGO_URI')}")
+
 async def fetch_wallets():
     cli = AsyncIOMotorClient(MONGO_URI)
     docs = await cli[DB_NAME][COLL].find({}, {"_id": 0, "wallet": 1}).to_list(None)
