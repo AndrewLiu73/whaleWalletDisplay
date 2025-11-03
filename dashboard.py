@@ -10,7 +10,7 @@ import datetime
 load_dotenv()  # Loads variables from .env into environment
 
 MONGO_URI = "mongodb+srv://andrewliu:xGMymy8wQ2vaL2No@cluster0.famk0m5.mongodb.net/hyperliquid?retryWrites=true&w=majority&authSource=admin"
-API_URL = os.getenv("API_URL")
+API_URL = "https:// api. hyperliquid. xyz"
 
 DB_NAME, COLL = "hyperliquid", "millionaires"
 COINS = ["BTC", "ETH", "HYPE"]
