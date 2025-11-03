@@ -3,31 +3,24 @@ import asyncio
 import aiohttp
 from motor.motor_asyncio import AsyncIOMotorClient
 from collections import Counter
+import pandas as pd
 import os
-from dotenv import load_dotenv
 import datetime
-
-load_dotenv()  # Loads variables from .env into environment
-
-MONGO_URI = "mongodb+srv://andrewliu:xGMymy8wQ2vaL2No@cluster0.famk0m5.mongodb.net/hyperliquid?retryWrites=true&w=majority&authSource=admin"
-API_URL = "https:// api. hyperliquid. xyz"
-
-DB_NAME, COLL = "hyperliquid", "millionaires"
-COINS = ["BTC", "ETH", "HYPE"]
-RETRY, PARALLEL = 3, 10
 
 def format_time():
     return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+# Set your env vars via Render dashboard, or .env locally
+MONGO_URI = os.getenv("MONGO_URI")
+API_URL = os.getenv("API_URL")
+DB_NAME, COLL = "hyperliquid", "millionaires"
+COINS = ["BTC", "ETH", "HYPE"]
+RETRY, PARALLEL = 3, 10
+
 async def fetch_wallets():
-    try:
-        cli = AsyncIOMotorClient(MONGO_URI)
-        docs = await cli[DB_NAME][COLL].find({}, {"_id": 0, "wallet": 1}).to_list(None)
-        wallets = [d["wallet"] for d in docs if "wallet" in d]
-        return wallets
-    except Exception as e:
-        st.error(f"MongoDB connection failed: {e}")
-        return []
+    cli = AsyncIOMotorClient(MONGO_URI)
+    docs = await cli[DB_NAME][COLL].find({}, {"_id": 0, "wallet": 1}).to_list(None)
+    return [d["wallet"] for d in docs if "wallet" in d]
 
 async def fetch_position(session, wallet):
     for attempt in range(RETRY):
@@ -36,9 +29,9 @@ async def fetch_position(session, wallet):
                 if resp.status == 200:
                     js = await resp.json()
                     return wallet, js.get("assetPositions", [])
-        except Exception as e:
+        except Exception:
             pass
-        await asyncio.sleep(2**attempt)
+        await asyncio.sleep(2 ** attempt)
     return wallet, []
 
 async def process_wallets(wallets):
@@ -63,8 +56,8 @@ async def process_wallets(wallets):
                     long_val = per_val[coin].get("B", 0.0)
                     short_val = per_val[coin].get("A", 0.0)
                     total = long_val + short_val
-                    l_pct = (long_val/total*100) if total else 0
-                    s_pct = (short_val/total*100) if total else 0
+                    l_pct = (long_val / total * 100) if total else 0
+                    s_pct = (short_val / total * 100) if total else 0
                     direction = "Long" if long_val > short_val else "Short" if short_val > long_val else "Neutral"
                     wallet_bias[wallet][coin] = {
                         "long": long_val, "short": short_val,
@@ -72,14 +65,13 @@ async def process_wallets(wallets):
                         "direction": direction
                     }
         await asyncio.gather(*[worker(w) for w in wallets])
-    # Aggregate stats
     agg_bias = {}
     for coin in COINS:
         long_val = agg_val[coin]["B"]
         short_val = agg_val[coin]["A"]
         total = long_val + short_val
-        l_pct = (long_val/total*100) if total else 0
-        s_pct = (short_val/total*100) if total else 0
+        l_pct = (long_val / total * 100) if total else 0
+        s_pct = (short_val / total * 100) if total else 0
         dirn = "Long" if long_val > short_val else "Short" if short_val > long_val else "Neutral"
         agg_bias[coin] = {
             "long": long_val, "short": short_val,
@@ -88,8 +80,7 @@ async def process_wallets(wallets):
         }
     return wallet_bias, agg_bias
 
-# --- Streamlit UI ---
-st.set_page_config(page_title='Millionaire Bias Tracker', layout='wide')
+st.set_page_config(page_title="Millionaire Bias Tracker", layout="wide")
 st.title("Millionaire Bias Tracker")
 
 btn = st.button("Refresh Bias Now")
@@ -100,22 +91,41 @@ if btn:
             wallet_bias, agg_bias = asyncio.run(process_wallets(wallets))
             st.success(f"Updated at {format_time()}! {len(wallets)} wallets loaded.")
 
-            st.header("Aggregate Bias")
+            # Aggregate bias table
+            agg_records = []
             for coin, stats in agg_bias.items():
-                st.subheader(coin)
-                st.write(f"{stats['direction']}: Long ${stats['long']:.2f} ({stats['long_pct']:.1f}%) | Short ${stats['short']:.2f} ({stats['short_pct']:.1f}%)")
-                st.progress(stats['long_pct']/100)
+                agg_records.append({
+                    "Coin": coin,
+                    "Direction": stats["direction"],
+                    "Long": stats["long"],
+                    "Long %": stats["long_pct"],
+                    "Short": stats["short"],
+                    "Short %": stats["short_pct"]
+                })
+            agg_df = pd.DataFrame(agg_records)
+            st.header("Aggregate Bias")
+            st.dataframe(agg_df)
 
+            # Individual bias table
+            ind_records = []
+            for wallet, coins in wallet_bias.items():
+                for coin, s in coins.items():
+                    ind_records.append({
+                        "Wallet": wallet,
+                        "Coin": coin,
+                        "Direction": s["direction"],
+                        "Long": s["long"],
+                        "Long %": s["long_pct"],
+                        "Short": s["short"],
+                        "Short %": s["short_pct"]
+                    })
+            ind_df = pd.DataFrame(ind_records)
             st.header("Individual Wallet Bias")
-            subset = st.multiselect("Show specific wallets:", wallets)
-            to_show = subset if subset else wallets[:min(10, len(wallets))]
-            for w in to_show:
-                coins = wallet_bias[w]
-                st.markdown(f"**{w}**")
-                for c, s in coins.items():
-                    st.write(f"{c}: {s['direction']} | Long ${s['long']:.2f} ({s['long_pct']:.1f}%) | Short ${s['short']:.2f} ({s['short_pct']:.1f}%)")
-                st.markdown('---')
-
+            # Optionally: Let user filter by wallet below
+            wallets_list = sorted({row['Wallet'] for row in ind_records})
+            selection = st.multiselect("Select wallets to display", wallets_list, default=wallets_list[:5])
+            filtered_df = ind_df[ind_df['Wallet'].isin(selection)]
+            st.dataframe(filtered_df)
         else:
             st.error("No wallets found or MongoDB error!")
 else:
